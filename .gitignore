@@ -1,3 +1,4 @@
 bin/
 *.db
 services-catalog-api
+INTERVIEW_GUIDE.md
