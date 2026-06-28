@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func main() {
@@ -34,24 +36,24 @@ func main() {
 
 	a := &app{store: db, jwtSecret: jwtSecret}
 
-	mux := http.NewServeMux()
+	r := chi.NewRouter()
 
-	mux.HandleFunc("GET /health", a.health)
+	r.Get("/health", a.health)
 
-	mux.HandleFunc("POST /api/v1/auth/token", a.issueToken)
+	r.Post("/api/v1/auth/token", a.issueToken)
 
-	mux.HandleFunc("GET /api/v1/services", a.listServices)
-	mux.HandleFunc("POST /api/v1/services", a.requireAuth(a.createService))
-	mux.HandleFunc("GET /api/v1/services/{id}", a.getService)
-	mux.HandleFunc("PUT /api/v1/services/{id}", a.requireAuth(a.updateService))
-	mux.HandleFunc("DELETE /api/v1/services/{id}", a.requireAuth(a.deleteService))
-	mux.HandleFunc("GET /api/v1/services/{id}/versions", a.listVersions)
-	mux.HandleFunc("POST /api/v1/services/{id}/versions", a.requireAuth(a.createVersion))
-	mux.HandleFunc("DELETE /api/v1/services/{id}/versions/{vid}", a.requireAuth(a.deleteVersion))
+	r.Get("/api/v1/services", a.listServices)
+	r.Post("/api/v1/services", a.requireAuth(a.createService))
+	r.Get("/api/v1/services/{id}", a.getService)
+	r.Put("/api/v1/services/{id}", a.requireAuth(a.updateService))
+	r.Delete("/api/v1/services/{id}", a.requireAuth(a.deleteService))
+	r.Get("/api/v1/services/{id}/versions", a.listVersions)
+	r.Post("/api/v1/services/{id}/versions", a.requireAuth(a.createVersion))
+	r.Delete("/api/v1/services/{id}/versions/{vid}", a.requireAuth(a.deleteVersion))
 
 	srv := &http.Server{
 		Addr:         ":" + port,
-		Handler:      mux,
+		Handler:      r,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,

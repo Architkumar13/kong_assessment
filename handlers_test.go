@@ -1,13 +1,25 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
+
+// withParams injects chi URL parameters into the request context.
+func withParams(r *http.Request, kv ...string) *http.Request {
+	rctx := chi.NewRouteContext()
+	for i := 0; i+1 < len(kv); i += 2 {
+		rctx.URLParams.Add(kv[i], kv[i+1])
+	}
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+}
 
 // ─── unit tests (no database required) ───────────────────────────────────────
 
@@ -190,7 +202,7 @@ func TestServiceCRUD(t *testing.T) {
 
 	// Get.
 	req = httptest.NewRequest("GET", "/api/v1/services/"+id, nil)
-	req.SetPathValue("id", id)
+	req = withParams(req, "id", id)
 	w = httptest.NewRecorder()
 	a.getService(w, req)
 	if w.Code != http.StatusOK {
@@ -202,7 +214,7 @@ func TestServiceCRUD(t *testing.T) {
 	req = httptest.NewRequest("PUT", "/api/v1/services/"+id, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.SetPathValue("id", id)
+	req = withParams(req, "id", id)
 	w = httptest.NewRecorder()
 	a.updateService(w, req)
 	if w.Code != http.StatusOK {
@@ -212,7 +224,7 @@ func TestServiceCRUD(t *testing.T) {
 	// Delete.
 	req = httptest.NewRequest("DELETE", "/api/v1/services/"+id, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.SetPathValue("id", id)
+	req = withParams(req, "id", id)
 	w = httptest.NewRecorder()
 	a.deleteService(w, req)
 	if w.Code != http.StatusNoContent {
@@ -221,7 +233,7 @@ func TestServiceCRUD(t *testing.T) {
 
 	// Get after delete → 404.
 	req = httptest.NewRequest("GET", "/api/v1/services/"+id, nil)
-	req.SetPathValue("id", id)
+	req = withParams(req, "id", id)
 	w = httptest.NewRecorder()
 	a.getService(w, req)
 	if w.Code != http.StatusNotFound {
@@ -274,7 +286,7 @@ func TestVersionCRUD(t *testing.T) {
 	req = httptest.NewRequest("POST", "/api/v1/services/"+svcID+"/versions", strings.NewReader(`{"tag":"v1.0.0","status":"active"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.SetPathValue("id", svcID)
+	req = withParams(req, "id", svcID)
 	w = httptest.NewRecorder()
 	a.createVersion(w, req)
 	if w.Code != http.StatusCreated {
@@ -286,7 +298,7 @@ func TestVersionCRUD(t *testing.T) {
 
 	// List versions.
 	req = httptest.NewRequest("GET", "/api/v1/services/"+svcID+"/versions", nil)
-	req.SetPathValue("id", svcID)
+	req = withParams(req, "id", svcID)
 	w = httptest.NewRecorder()
 	a.listVersions(w, req)
 	if w.Code != http.StatusOK {
@@ -301,7 +313,7 @@ func TestVersionCRUD(t *testing.T) {
 	// Delete version.
 	req = httptest.NewRequest("DELETE", "/api/v1/services/"+svcID+"/versions/"+verID, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.SetPathValue("vid", verID)
+	req = withParams(req, "vid", verID)
 	w = httptest.NewRecorder()
 	a.deleteVersion(w, req)
 	if w.Code != http.StatusNoContent {
