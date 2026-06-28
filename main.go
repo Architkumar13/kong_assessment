@@ -13,13 +13,16 @@ import (
 func main() {
 	port := envOr("PORT", "8080")
 	jwtSecret := envOr("JWT_SECRET", "dev-secret-change-in-production")
-	dbPath := envOr("DB_PATH", "services.db")
+	dbURL := os.Getenv("DATABASE_URL")
 
 	if jwtSecret == "dev-secret-change-in-production" {
 		log.Println("warning: JWT_SECRET is set to the default insecure value")
 	}
+	if dbURL == "" {
+		log.Fatal("DATABASE_URL is required")
+	}
 
-	db, err := newStore(dbPath)
+	db, err := newStore(dbURL)
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}

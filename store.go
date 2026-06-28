@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // Service is a catalog entry.
@@ -38,11 +38,10 @@ type store struct {
 }
 
 func newStore(dsn string) (*store, error) {
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	db.SetMaxOpenConns(1)
 	s := &store{db: db}
 	if err := s.migrate(); err != nil {
 		db.Close()
@@ -55,15 +54,12 @@ func (s *store) close() error { return s.db.Close() }
 
 func (s *store) migrate() error {
 	_, err := s.db.Exec(`
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
-
 CREATE TABLE IF NOT EXISTS services (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    created_at  TIMESTAMPTZ NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS versions (
@@ -71,7 +67,7 @@ CREATE TABLE IF NOT EXISTS versions (
     service_id TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
     tag        TEXT NOT NULL,
     status     TEXT NOT NULL DEFAULT 'active',
-    created_at TEXT NOT NULL
+    created_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_versions_service_id ON versions(service_id);
@@ -97,12 +93,12 @@ func (s *store) listServices(ctx context.Context, search, sortBy, order string, 
 		order = "asc"
 	}
 
-	var where string
+	// Build optional WHERE clause. $1 can be reused twice in the ILIKE expression.
 	var args []any
+	where := ""
 	if search != "" {
-		where = "WHERE name LIKE ? OR description LIKE ?"
-		like := "%" + search + "%"
-		args = append(args, like, like)
+		where = "WHERE name ILIKE $1 OR description ILIKE $1"
+		args = append(args, "%"+search+"%")
 	}
 
 	var total int
@@ -110,11 +106,13 @@ func (s *store) listServices(ctx context.Context, search, sortBy, order string, 
 		return nil, 0, err
 	}
 
+	// LIMIT and OFFSET placeholders follow any search arg.
+	n := len(args)
 	offset := (page - 1) * pageSize
 	query := fmt.Sprintf(`
 SELECT id, name, description, created_at, updated_at,
        (SELECT COUNT(*) FROM versions WHERE service_id = services.id) AS version_count
-FROM services %s ORDER BY %s %s LIMIT ? OFFSET ?`, where, col, order)
+FROM services %s ORDER BY %s %s LIMIT $%d OFFSET $%d`, where, col, order, n+1, n+2)
 
 	rows, err := s.db.QueryContext(ctx, query, append(args, pageSize, offset)...)
 	if err != nil {
@@ -125,12 +123,9 @@ FROM services %s ORDER BY %s %s LIMIT ? OFFSET ?`, where, col, order)
 	var services []Service
 	for rows.Next() {
 		var svc Service
-		var createdAt, updatedAt string
-		if err := rows.Scan(&svc.ID, &svc.Name, &svc.Description, &createdAt, &updatedAt, &svc.VersionCount); err != nil {
+		if err := rows.Scan(&svc.ID, &svc.Name, &svc.Description, &svc.CreatedAt, &svc.UpdatedAt, &svc.VersionCount); err != nil {
 			return nil, 0, err
 		}
-		svc.CreatedAt = parseTime(createdAt)
-		svc.UpdatedAt = parseTime(updatedAt)
 		services = append(services, svc)
 	}
 	return services, total, rows.Err()
@@ -140,20 +135,14 @@ func (s *store) getService(ctx context.Context, id string) (*Service, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT id, name, description, created_at, updated_at,
        (SELECT COUNT(*) FROM versions WHERE service_id = services.id)
-FROM services WHERE id = ?`, id)
+FROM services WHERE id = $1`, id)
 
 	var svc Service
-	var createdAt, updatedAt string
-	err := row.Scan(&svc.ID, &svc.Name, &svc.Description, &createdAt, &updatedAt, &svc.VersionCount)
+	err := row.Scan(&svc.ID, &svc.Name, &svc.Description, &svc.CreatedAt, &svc.UpdatedAt, &svc.VersionCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errNotFound
 	}
-	if err != nil {
-		return nil, err
-	}
-	svc.CreatedAt = parseTime(createdAt)
-	svc.UpdatedAt = parseTime(updatedAt)
-	return &svc, nil
+	return &svc, err
 }
 
 func (s *store) createService(ctx context.Context, name, description string) (*Service, error) {
@@ -166,8 +155,8 @@ func (s *store) createService(ctx context.Context, name, description string) (*S
 		UpdatedAt:   now,
 	}
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO services (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		svc.ID, svc.Name, svc.Description, fmtTime(svc.CreatedAt), fmtTime(svc.UpdatedAt))
+		"INSERT INTO services (id, name, description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
+		svc.ID, svc.Name, svc.Description, svc.CreatedAt, svc.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -177,8 +166,8 @@ func (s *store) createService(ctx context.Context, name, description string) (*S
 func (s *store) updateService(ctx context.Context, id, name, description string) (*Service, error) {
 	now := time.Now().UTC()
 	res, err := s.db.ExecContext(ctx,
-		"UPDATE services SET name = ?, description = ?, updated_at = ? WHERE id = ?",
-		name, description, fmtTime(now), id)
+		"UPDATE services SET name = $1, description = $2, updated_at = $3 WHERE id = $4",
+		name, description, now, id)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +178,7 @@ func (s *store) updateService(ctx context.Context, id, name, description string)
 }
 
 func (s *store) deleteService(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, "DELETE FROM services WHERE id = ?", id)
+	res, err := s.db.ExecContext(ctx, "DELETE FROM services WHERE id = $1", id)
 	if err != nil {
 		return err
 	}
@@ -203,7 +192,7 @@ func (s *store) deleteService(ctx context.Context, id string) error {
 
 func (s *store) listVersions(ctx context.Context, serviceID string) ([]Version, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, service_id, tag, status, created_at FROM versions WHERE service_id = ? ORDER BY created_at ASC",
+		"SELECT id, service_id, tag, status, created_at FROM versions WHERE service_id = $1 ORDER BY created_at ASC",
 		serviceID)
 	if err != nil {
 		return nil, err
@@ -213,11 +202,9 @@ func (s *store) listVersions(ctx context.Context, serviceID string) ([]Version, 
 	var versions []Version
 	for rows.Next() {
 		var v Version
-		var createdAt string
-		if err := rows.Scan(&v.ID, &v.ServiceID, &v.Tag, &v.Status, &createdAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.ServiceID, &v.Tag, &v.Status, &v.CreatedAt); err != nil {
 			return nil, err
 		}
-		v.CreatedAt = parseTime(createdAt)
 		versions = append(versions, v)
 	}
 	return versions, rows.Err()
@@ -232,8 +219,8 @@ func (s *store) createVersion(ctx context.Context, serviceID, tag, status string
 		CreatedAt: time.Now().UTC(),
 	}
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO versions (id, service_id, tag, status, created_at) VALUES (?, ?, ?, ?, ?)",
-		v.ID, v.ServiceID, v.Tag, v.Status, fmtTime(v.CreatedAt))
+		"INSERT INTO versions (id, service_id, tag, status, created_at) VALUES ($1, $2, $3, $4, $5)",
+		v.ID, v.ServiceID, v.Tag, v.Status, v.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +228,7 @@ func (s *store) createVersion(ctx context.Context, serviceID, tag, status string
 }
 
 func (s *store) deleteVersion(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, "DELETE FROM versions WHERE id = ?", id)
+	res, err := s.db.ExecContext(ctx, "DELETE FROM versions WHERE id = $1", id)
 	if err != nil {
 		return err
 	}
@@ -262,7 +249,7 @@ func (s *store) seed(ctx context.Context) error {
 
 	type entry struct {
 		name, desc string
-		versions   [][2]string // [tag, status]
+		versions   [][2]string // {tag, status}
 	}
 	seeds := []entry{
 		{"Auth Service", "Handles authentication and authorisation for all platform services.",
@@ -288,35 +275,20 @@ func (s *store) seed(ctx context.Context) error {
 		svcTime := now.Add(-time.Duration(len(seeds)-i) * 24 * time.Hour)
 		id := uuid.New().String()
 		_, err := s.db.ExecContext(ctx,
-			"INSERT INTO services (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-			id, e.name, e.desc, fmtTime(svcTime), fmtTime(svcTime))
+			"INSERT INTO services (id, name, description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
+			id, e.name, e.desc, svcTime, svcTime)
 		if err != nil {
 			return err
 		}
 		for j, v := range e.versions {
 			vTime := svcTime.Add(time.Duration(j) * 48 * time.Hour)
 			_, err := s.db.ExecContext(ctx,
-				"INSERT INTO versions (id, service_id, tag, status, created_at) VALUES (?, ?, ?, ?, ?)",
-				uuid.New().String(), id, v[0], v[1], fmtTime(vTime))
+				"INSERT INTO versions (id, service_id, tag, status, created_at) VALUES ($1, $2, $3, $4, $5)",
+				uuid.New().String(), id, v[0], v[1], vTime)
 			if err != nil {
 				return err
 			}
 		}
 	}
 	return nil
-}
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
-
-func fmtTime(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
-}
-
-func parseTime(s string) time.Time {
-	for _, f := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05", "2006-01-02 15:04:05"} {
-		if t, err := time.Parse(f, s); err == nil {
-			return t.UTC()
-		}
-	}
-	return time.Time{}
 }

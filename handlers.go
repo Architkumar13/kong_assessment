@@ -18,6 +18,44 @@ type app struct {
 	jwtSecret string
 }
 
+// ─── validation ───────────────────────────────────────────────────────────────
+
+// tagRegex allows tags like v1.0.0, v2.1.0-beta, v3.0.0-rc.1.
+var tagRegex = regexp.MustCompile(`^v\d+\.\d+(\.\d+)?(-[a-zA-Z0-9.]+)?$`)
+
+var validStatuses = map[string]bool{
+	"active":     true,
+	"deprecated": true,
+	"beta":       true,
+}
+
+func validateService(name, desc string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("name is required")
+	}
+	if len(name) > 100 {
+		return errors.New("name must be 100 characters or fewer")
+	}
+	if len(strings.TrimSpace(desc)) > 500 {
+		return errors.New("description must be 500 characters or fewer")
+	}
+	return nil
+}
+
+func validateVersion(tag, status string) error {
+	if tag == "" {
+		return errors.New("tag is required")
+	}
+	if !tagRegex.MatchString(tag) {
+		return errors.New("tag must follow vMAJOR.MINOR[.PATCH][-pre] format (e.g. v1.0.0)")
+	}
+	if status != "" && !validStatuses[status] {
+		return errors.New("status must be one of: active, deprecated, beta")
+	}
+	return nil
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -178,16 +216,8 @@ func (a *app) createService(w http.ResponseWriter, r *http.Request) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Description = strings.TrimSpace(req.Description)
 
-	if req.Name == "" {
-		writeError(w, http.StatusUnprocessableEntity, "name is required")
-		return
-	}
-	if len(req.Name) > 100 {
-		writeError(w, http.StatusUnprocessableEntity, "name must be 100 characters or fewer")
-		return
-	}
-	if len(req.Description) > 500 {
-		writeError(w, http.StatusUnprocessableEntity, "description must be 500 characters or fewer")
+	if err := validateService(req.Name, req.Description); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 
@@ -213,16 +243,8 @@ func (a *app) updateService(w http.ResponseWriter, r *http.Request) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Description = strings.TrimSpace(req.Description)
 
-	if req.Name == "" {
-		writeError(w, http.StatusUnprocessableEntity, "name is required")
-		return
-	}
-	if len(req.Name) > 100 {
-		writeError(w, http.StatusUnprocessableEntity, "name must be 100 characters or fewer")
-		return
-	}
-	if len(req.Description) > 500 {
-		writeError(w, http.StatusUnprocessableEntity, "description must be 500 characters or fewer")
+	if err := validateService(req.Name, req.Description); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 
@@ -251,15 +273,6 @@ func (a *app) deleteService(w http.ResponseWriter, r *http.Request) {
 }
 
 // ─── versions ─────────────────────────────────────────────────────────────────
-
-// tagRegex allows semantic version tags like v1.0.0, v2.1.0-beta, v3.0.0-rc.1, etc.
-var tagRegex = regexp.MustCompile(`^v\d+\.\d+(\.\d+)?(-[a-zA-Z0-9.]+)?$`)
-
-var validStatuses = map[string]bool{
-	"active":     true,
-	"deprecated": true,
-	"beta":       true,
-}
 
 func (a *app) listVersions(w http.ResponseWriter, r *http.Request) {
 	serviceID := r.PathValue("id")
@@ -293,20 +306,11 @@ func (a *app) createVersion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-
-	if req.Tag == "" {
-		writeError(w, http.StatusUnprocessableEntity, "tag is required")
-		return
-	}
-	if !tagRegex.MatchString(req.Tag) {
-		writeError(w, http.StatusUnprocessableEntity, "tag must follow vMAJOR.MINOR[.PATCH][-pre] format (e.g. v1.0.0)")
-		return
-	}
 	if req.Status == "" {
 		req.Status = "active"
 	}
-	if !validStatuses[req.Status] {
-		writeError(w, http.StatusUnprocessableEntity, "status must be one of: active, deprecated, beta")
+	if err := validateVersion(req.Tag, req.Status); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 
