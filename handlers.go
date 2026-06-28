@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -173,7 +174,7 @@ func (a *app) listServices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) getService(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := chi.URLParam(r, "id")
 	svc, err := a.store.getService(r.Context(), id)
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, "service not found")
@@ -230,7 +231,7 @@ func (a *app) createService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) updateService(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := chi.URLParam(r, "id")
 
 	var req struct {
 		Name        string `json:"name"`
@@ -261,7 +262,7 @@ func (a *app) updateService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) deleteService(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := chi.URLParam(r, "id")
 	if err := a.store.deleteService(r.Context(), id); errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, "service not found")
 		return
@@ -275,7 +276,7 @@ func (a *app) deleteService(w http.ResponseWriter, r *http.Request) {
 // ─── versions ─────────────────────────────────────────────────────────────────
 
 func (a *app) listVersions(w http.ResponseWriter, r *http.Request) {
-	serviceID := r.PathValue("id")
+	serviceID := chi.URLParam(r, "id")
 	if _, err := a.store.getService(r.Context(), serviceID); errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, "service not found")
 		return
@@ -296,7 +297,7 @@ func (a *app) listVersions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) createVersion(w http.ResponseWriter, r *http.Request) {
-	serviceID := r.PathValue("id")
+	serviceID := chi.URLParam(r, "id")
 
 	var req struct {
 		Tag    string `json:"tag"`
@@ -331,7 +332,7 @@ func (a *app) createVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) deleteVersion(w http.ResponseWriter, r *http.Request) {
-	vid := r.PathValue("vid")
+	vid := chi.URLParam(r, "vid")
 	if err := a.store.deleteVersion(r.Context(), vid); errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, "version not found")
 		return
